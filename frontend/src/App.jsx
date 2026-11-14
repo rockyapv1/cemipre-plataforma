@@ -1,376 +1,972 @@
 import { useEffect, useMemo, useState } from 'react';
+import {
+  Activity,
+  ArrowUpRight,
+  Bell,
+  BookOpen,
+  CalendarDays,
+  ChevronDown,
+  Home,
+  Info,
+  Leaf,
+  Mail,
+  Menu,
+  ShieldCheck,
+  Sparkles,
+  Star,
+  Users,
+  X,
+} from 'lucide-react';
 import { api } from './api.js';
+import { isSupabaseConfigured } from './supabase.js';
+import {
+  AVATAR_COLORS,
+  TEAM_MEMBERS,
+  buildDemoState,
+  getInitials,
+} from './demoData.js';
+import { GoogleDriveIcon } from './components/Icons.jsx';
+import {
+  AboutModal,
+  EmailPreviewModal,
+  FormActions,
+  LogEditorModal,
+  Modal,
+} from './components/Modals.jsx';
+import {
+  InicioView,
+  ResumenesIAView,
+  UsuarioDetailView,
+  UsuariosView,
+} from './components/DashboardViews.jsx';
+import {
+  ActividadView,
+  AvisosCorreoView,
+  BitacorasView,
+  CalendarioView,
+  CarpetasDriveView,
+} from './components/WorkspaceViews.jsx';
 
-const TABS = [
-  { id: 'bitacoras', label: 'Bitácoras', symbol: '▦' },
-  { id: 'calendario', label: 'Calendario', symbol: '▤' },
-  { id: 'actividad', label: 'Actividad', symbol: '◎' },
-];
+const NAV_TITLES = {
+  inicio: 'Inicio',
+  usuarios: 'Usuarios',
+  'usuario-detalle': 'Perfil de usuario',
+  bitacoras: 'Bitácoras',
+  resumenes: 'Resúmenes IA',
+  calendario: 'Calendario',
+  actividad: 'Actividad',
+  favoritos: 'Mis favoritos',
+  avisos: 'Avisos por correo',
+  drive: 'Carpetas de Drive',
+};
 
-const formatDate = (iso) => new Intl.DateTimeFormat('es-CL', {
-  timeZone: 'America/Santiago', day: '2-digit', month: 'short', year: 'numeric',
+const formatShortDate = (iso) => new Intl.DateTimeFormat('es-CL', {
+  timeZone: 'America/Santiago',
+  day: 'numeric',
+  month: 'short',
 }).format(new Date(iso));
 
 const formatDateTime = (iso) => new Intl.DateTimeFormat('es-CL', {
-  timeZone: 'America/Santiago', day: '2-digit', month: 'short',
-  hour: '2-digit', minute: '2-digit',
+  timeZone: 'America/Santiago',
+  day: '2-digit',
+  month: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
 }).format(new Date(iso));
 
-function Modal({ title, onClose, children }) {
-  useEffect(() => {
-    const onEscape = (event) => { if (event.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onEscape);
-    return () => window.removeEventListener('keydown', onEscape);
-  }, [onClose]);
+const formatTodayHeader = () => new Intl.DateTimeFormat('es-CL', {
+  timeZone: 'America/Santiago',
+  weekday: 'long',
+  day: 'numeric',
+  month: 'long',
+  year: 'numeric',
+}).format(new Date()).toUpperCase();
 
-  return (
-    <div className="modal-backdrop" onMouseDown={(event) => {
-      if (event.target === event.currentTarget) onClose();
-    }}>
-      <section className="modal" role="dialog" aria-modal="true" aria-label={title}>
-        <div className="modal-heading">
-          <h2>{title}</h2>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="Cerrar">×</button>
-        </div>
-        {children}
-      </section>
-    </div>
-  );
-}
-
-function Notice({ children, kind = 'info' }) {
-  return <div className={`notice notice-${kind}`} role="status">{children}</div>;
-}
-
-function FormActions({ onCancel, saving, action = 'Guardar' }) {
-  return (
-    <div className="form-actions">
-      <button className="btn btn-ghost" type="button" onClick={onCancel}>Cancelar</button>
-      <button className="btn btn-primary" type="submit" disabled={saving}>
-        {saving ? 'Guardando…' : action}
-      </button>
-    </div>
-  );
+function loadStoredFavorites(defaultIds) {
+  try {
+    const raw = window.localStorage.getItem('cemipre_favorites_v1');
+    if (raw) return new Set(JSON.parse(raw));
+  } catch {
+    // Ignorar errores de acceso a localStorage.
+  }
+  return new Set(defaultIds);
 }
 
 export default function App() {
-  const [tab, setTab] = useState('bitacoras');
+  const [view, setView] = useState('inicio');
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [activeMemberId, setActiveMemberId] = useState(TEAM_MEMBERS[0].id);
+
   const [people, setPeople] = useState([]);
-  const [selectedId, setSelectedId] = useState(null);
-  const [person, setPerson] = useState(null);
+  const [allLogs, setAllLogs] = useState([]);
   const [events, setEvents] = useState([]);
   const [changes, setChanges] = useState([]);
+  const [notices, setNotices] = useState([]);
+  const [favorites, setFavorites] = useState(() => new Set());
+
+  const [selectedPersonId, setSelectedPersonId] = useState(null);
+  const [selectedPersonDetail, setSelectedPersonDetail] = useState(null);
   const [summary, setSummary] = useState(null);
-  const [search, setSearch] = useState('');
+  const [loadingSummary, setLoadingSummary] = useState(false);
+
+  const [userSearch, setUserSearch] = useState('');
+  const [programFilter, setProgramFilter] = useState('');
+
   const [modal, setModal] = useState(null);
+  const [modalData, setModalData] = useState({});
   const [form, setForm] = useState({});
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
-  const [reload, setReload] = useState(0);
 
-  const visiblePeople = useMemo(() => people.filter((p) =>
-    `${p.codigo} ${p.nombre}`.toLocaleLowerCase('es').includes(search.toLocaleLowerCase('es')),
-  ), [people, search]);
+  const activeMember = useMemo(
+    () => TEAM_MEMBERS.find((m) => m.id === activeMemberId) || TEAM_MEMBERS[0],
+    [activeMemberId],
+  );
 
-  const totalLogs = people.reduce((total, p) => total + p.total_bitacoras, 0);
+  const todayLabel = useMemo(() => formatTodayHeader(), []);
+  const unreadNotices = notices.filter((n) => n.unread).length;
 
-  async function loadOverview() {
-    const [peopleData, eventsData, activityData] = await Promise.all([
-      api.users(), api.events(), api.activity(),
+  async function refreshSupabaseData() {
+    const [peopleData, logsData, eventsData, activityData] = await Promise.all([
+      api.users(),
+      api.logs(),
+      api.events(),
+      api.activity(),
     ]);
-    setPeople(peopleData.personas);
+    const decoratedPeople = peopleData.personas.map((p, index) => ({
+      ...p,
+      initials: getInitials(p.nombre),
+      color: AVATAR_COLORS[index % AVATAR_COLORS.length],
+      program: 'Seguimiento CEMIPRE',
+    }));
+    setPeople(decoratedPeople);
+    setAllLogs(logsData.bitacoras);
     setEvents(eventsData.eventos);
     setChanges(activityData.actividad);
-    setSelectedId((old) => old ?? peopleData.personas[0]?.id ?? null);
+    setSelectedPersonId((prev) => prev ?? decoratedPeople[0]?.id ?? null);
   }
 
   useEffect(() => {
     let ignore = false;
     (async () => {
       try {
-        const [peopleData, eventsData, activityData] = await Promise.all([
-          api.users(), api.events(), api.activity(),
-        ]);
-        if (ignore) return;
-        setPeople(peopleData.personas);
-        setEvents(eventsData.eventos);
-        setChanges(activityData.actividad);
-        setSelectedId(peopleData.personas[0]?.id ?? null);
+        if (isSupabaseConfigured) {
+          await refreshSupabaseData();
+          if (!ignore) setFavorites(loadStoredFavorites([]));
+        } else {
+          const demo = buildDemoState();
+          if (ignore) return;
+          setPeople(demo.people);
+          setAllLogs(demo.logs);
+          setEvents(demo.events);
+          setChanges(demo.activity);
+          setNotices(demo.notices);
+          setSelectedPersonId(demo.people[0]?.id ?? null);
+          setFavorites(loadStoredFavorites(demo.logs.filter((l) => l.favorite).map((l) => l.id)));
+        }
       } catch (e) {
         if (!ignore) setError(e.message);
       } finally {
         if (!ignore) setBusy(false);
       }
     })();
-    return () => { ignore = true; };
+    return () => {
+      ignore = true;
+    };
   }, []);
 
   useEffect(() => {
-    if (selectedId === null) { setPerson(null); return; }
+    if (selectedPersonId === null) {
+      setSelectedPersonDetail(null);
+      return;
+    }
+    if (!isSupabaseConfigured) {
+      const person = people.find((p) => p.id === selectedPersonId) || null;
+      setSelectedPersonDetail(person);
+      return;
+    }
     let ignore = false;
-    setSummary(null);
-    api.user(selectedId).then((data) => { if (!ignore) setPerson(data); })
-      .catch((e) => { if (!ignore) setError(e.message); });
-    return () => { ignore = true; };
-  }, [selectedId, reload]);
+    api
+      .user(selectedPersonId)
+      .then((data) => {
+        if (!ignore) {
+          const matching = people.find((p) => p.id === selectedPersonId);
+          setSelectedPersonDetail({
+            ...data,
+            color: matching?.color || 'peach',
+            program: matching?.program || 'Seguimiento CEMIPRE',
+            initials: getInitials(data.nombre),
+          });
+        }
+      })
+      .catch((e) => {
+        if (!ignore) setError(e.message);
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [selectedPersonId, people]);
 
-  async function mutation(fn, success) {
+  function navigate(targetView) {
+    setView(targetView);
+    setMobileNavOpen(false);
+    setError('');
+  }
+
+  function handleSelectPerson(personId) {
+    setSelectedPersonId(personId);
+    setSummary(null);
+    navigate('usuario-detalle');
+  }
+
+  function toggleFavorite(logId) {
+    setFavorites((prev) => {
+      const next = new Set(prev);
+      if (next.has(logId)) next.delete(logId);
+      else next.add(logId);
+      try {
+        window.localStorage.setItem('cemipre_favorites_v1', JSON.stringify([...next]));
+      } catch {
+        // Ignorar errores de almacenamiento local.
+      }
+      return next;
+    });
+  }
+
+  function openNewPersonModal() {
+    setError('');
+    setForm({ codigo: '', nombre: '' });
+    setModal('new-person');
+  }
+
+  function openNewEventModal() {
+    setError('');
+    setForm({ titulo: '', inicio: '', fin: '', responsable: activeMember.name, descripcion: '', tipo: 'Reunión' });
+    setModal('new-event');
+  }
+
+  function openLogModal(log = null) {
+    setError('');
+    setModalData(log || {});
+    setModal('log-editor');
+  }
+
+  async function handleCreatePerson(event) {
+    event.preventDefault();
     setSaving(true);
     setError('');
-    setMessage('');
     try {
-      const result = await fn();
-      await loadOverview();
-      setReload((n) => n + 1);
-      setMessage(success);
+      const codigo = (form.codigo || '').trim();
+      const nombre = (form.nombre || '').trim();
+      if (!codigo || !nombre) {
+        throw new Error('Código y nombre son obligatorios.');
+      }
+
+      if (isSupabaseConfigured) {
+        const created = await api.createUser({ codigo, nombre });
+        await refreshSupabaseData();
+        setSelectedPersonId(created.id);
+      } else {
+        if (people.some((p) => p.codigo.toLowerCase() === codigo.toLowerCase())) {
+          throw new Error('Ya existe un usuario con ese código.');
+        }
+        const nextId = Math.max(0, ...people.map((p) => p.id)) + 1;
+        const created = {
+          id: nextId,
+          codigo,
+          nombre,
+          initials: getInitials(nombre),
+          color: AVATAR_COLORS[people.length % AVATAR_COLORS.length],
+          program: 'Programa de acompañamiento',
+          joined: '2026',
+          total_bitacoras: 0,
+        };
+        setPeople((prev) => [...prev, created]);
+        setChanges((prev) => [
+          { id: Date.now(), descripcion: `Se creó el registro ${codigo} (${nombre}).`, fecha: new Date().toISOString() },
+          ...prev,
+        ]);
+        setSelectedPersonId(nextId);
+      }
+      setMessage('Usuario agregado correctamente.');
       setModal(null);
-      return result;
+      navigate('usuario-detalle');
     } catch (e) {
       setError(e.message);
-      return null;
     } finally {
       setSaving(false);
     }
   }
 
-  function openModal(type, data = {}) {
+  async function handleSaveLog(payload) {
+    setSaving(true);
     setError('');
-    setForm(data);
-    setModal(type);
+    try {
+      const targetPersonId = payload.persona_id || selectedPersonId || people[0]?.id;
+      const targetPerson = people.find((p) => p.id === targetPersonId);
+
+      if (isSupabaseConfigured) {
+        if (payload.id) {
+          await api.updateLog(payload.id, {
+            titulo: payload.titulo,
+            url_docs: payload.url_docs,
+          });
+        } else {
+          await api.createLog({
+            persona_id: targetPersonId,
+            titulo: payload.titulo,
+            url_docs: payload.url_docs,
+          });
+        }
+        await refreshSupabaseData();
+      } else {
+        const nowIso = new Date().toISOString();
+        const authorShort = activeMember.name.split(' ')[0];
+        if (payload.id) {
+          setAllLogs((prev) => prev.map((item) => (item.id === payload.id ? {
+            ...item,
+            titulo: payload.titulo,
+            url_docs: payload.url_docs,
+            contenido: payload.contenido,
+            author: authorShort,
+            actualizada: nowIso,
+            history: [
+              { id: `${Date.now()}-h`, author: activeMember.name, date: nowIso, note: 'Actualización de ficha y contenido' },
+              ...(item.history || []),
+            ],
+          } : item)));
+          setChanges((prev) => [
+            { id: Date.now(), descripcion: `${authorShort} actualizó "${payload.titulo}".`, fecha: nowIso },
+            ...prev,
+          ]);
+        } else {
+          const nextId = Math.max(0, ...allLogs.map((l) => l.id)) + 1;
+          const created = {
+            id: nextId,
+            persona_id: targetPersonId,
+            persona_nombre: targetPerson?.nombre || 'Usuario',
+            persona_codigo: targetPerson?.codigo || '',
+            titulo: payload.titulo,
+            area: 'Seguimiento',
+            author: authorShort,
+            url_docs: payload.url_docs,
+            contenido: payload.contenido || '',
+            extracto_demo: 'Bitácora recién registrada.',
+            actualizada: nowIso,
+            history: [{ id: `${Date.now()}-h`, author: activeMember.name, date: nowIso, note: 'Creación de bitácora' }],
+            comments: [],
+          };
+          setAllLogs((prev) => [created, ...prev]);
+          setPeople((prev) => prev.map((p) => (p.id === targetPersonId
+            ? { ...p, total_bitacoras: (p.total_bitacoras || 0) + 1 }
+            : p)));
+          setChanges((prev) => [
+            { id: Date.now(), descripcion: `${authorShort} agregó "${payload.titulo}" a ${targetPerson?.nombre || ''}.`, fecha: nowIso },
+            ...prev,
+          ]);
+        }
+
+        if (payload.notifyTeam) {
+          setNotices((prev) => [
+            {
+              id: Date.now(),
+              subject: `Actualización en bitácora: ${payload.titulo} · ${targetPerson?.nombre || ''}`,
+              recipients: TEAM_MEMBERS.filter((m) => m.id !== activeMember.id).map(
+                (m) => `${m.id}@cemipre-demo.org`,
+              ),
+              author: activeMember.name,
+              fecha: nowIso,
+              logTitle: payload.titulo,
+              personName: targetPerson?.nombre || '',
+              preview: `Se actualizó la bitácora "${payload.titulo}". Por privacidad, revisa los detalles dentro de la plataforma o en Google Docs.`,
+              unread: true,
+            },
+            ...prev,
+          ]);
+        }
+      }
+
+      setMessage(payload.id ? 'Bitácora actualizada.' : 'Bitácora registrada.');
+      setModal(null);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function updateField(field, value) {
-    setForm((current) => ({ ...current, [field]: value }));
+  function handleAddComment(logId, text, authorName) {
+    const nowIso = new Date().toISOString();
+    setAllLogs((prev) => prev.map((item) => (item.id === logId ? {
+      ...item,
+      comments: [...(item.comments || []), { id: `${Date.now()}-c`, author: authorName, date: nowIso, text }],
+    } : item)));
+    setModalData((prev) => ({
+      ...prev,
+      comments: [...(prev.comments || []), { id: `${Date.now()}-c`, author: authorName, date: nowIso, text }],
+    }));
   }
 
-  async function submitModal(event) {
+  async function handleCreateEvent(event) {
     event.preventDefault();
-    if (modal === 'new-person') {
-      const result = await mutation(() => api.createUser({
-        codigo: (form.codigo || '').trim(), nombre: (form.nombre || '').trim(),
-      }), 'Usuario agregado correctamente.');
-      if (result) { setSelectedId(result.id); setTab('bitacoras'); }
-    }
-    if (modal === 'new-log' && selectedId !== null) {
-      await mutation(() => api.createLog({
-        persona_id: selectedId, titulo: form.titulo || '', url_docs: (form.url_docs || '').trim(),
-      }), 'Bitácora registrada.');
-    }
-    if (modal === 'edit-log') {
-      await mutation(() => api.updateLog(form.id, {
-        titulo: form.titulo || '', url_docs: (form.url_docs || '').trim(),
-      }), 'Datos de la bitácora actualizados.');
-    }
-    if (modal === 'new-event') {
+    setSaving(true);
+    setError('');
+    try {
       if (!form.inicio || !form.fin) {
-        setError('Debes indicar fecha y hora de inicio y fin.');
-        return;
+        throw new Error('Debes indicar fecha y hora de inicio y fin.');
       }
       const start = new Date(form.inicio);
       const end = new Date(form.fin);
-      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-        setError('Fecha u hora inválida.');
-        return;
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+        throw new Error('Las fechas deben ser válidas y el fin posterior al inicio.');
       }
-      await mutation(() => api.createEvent({
-        titulo: form.titulo || '', descripcion: form.descripcion || '',
-        responsable: form.responsable || 'Equipo CEMIPRE',
-        inicio: start.toISOString(), fin: end.toISOString(),
-      }), 'Evento creado en el calendario local.');
+
+      if (isSupabaseConfigured) {
+        await api.createEvent({
+          titulo: form.titulo || '',
+          descripcion: form.descripcion || '',
+          responsable: form.responsable || activeMember.name,
+          inicio: start.toISOString(),
+          fin: end.toISOString(),
+        });
+        await refreshSupabaseData();
+      } else {
+        const created = {
+          id: Date.now(),
+          titulo: (form.titulo || '').trim(),
+          descripcion: form.descripcion || '',
+          responsable: form.responsable || activeMember.name,
+          tipo: form.tipo || 'Agenda',
+          inicio: start.toISOString(),
+          fin: end.toISOString(),
+        };
+        setEvents((prev) => [...prev, created]);
+        setChanges((prev) => [
+          { id: Date.now(), descripcion: `Se creó el evento "${created.titulo}".`, fecha: new Date().toISOString() },
+          ...prev,
+        ]);
+      }
+      setMessage('Evento agregado a la agenda.');
+      setModal(null);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
     }
   }
 
-  async function showSummary() {
-    if (selectedId === null) return;
-    setError('');
-    try { setSummary(await api.summary(selectedId)); }
-    catch (e) { setError(e.message); }
+  async function handleDeleteEvent(event) {
+    if (!window.confirm(`¿Eliminar el evento «${event.titulo}»?`)) return;
+    try {
+      if (isSupabaseConfigured) {
+        await api.deleteEvent(event.id);
+        await refreshSupabaseData();
+      } else {
+        setEvents((prev) => prev.filter((item) => item.id !== event.id));
+        setChanges((prev) => [
+          { id: Date.now(), descripcion: `Se eliminó el evento "${event.titulo}".`, fecha: new Date().toISOString() },
+          ...prev,
+        ]);
+      }
+      setMessage('Evento eliminado.');
+    } catch (e) {
+      setError(e.message);
+    }
   }
 
-  async function removeEvent(event) {
-    if (!window.confirm(`¿Eliminar el evento «${event.titulo}»?`)) return;
-    await mutation(() => api.deleteEvent(event.id), 'Evento eliminado.');
+  async function handleGenerateSummary(personId) {
+    setSelectedPersonId(personId);
+    setLoadingSummary(true);
+    setError('');
+    try {
+      if (isSupabaseConfigured) {
+        setSummary(await api.summary(personId));
+      } else {
+        const person = people.find((p) => p.id === personId);
+        const personLogs = allLogs.filter((l) => l.persona_id === personId);
+        setSummary({
+          es_demo: true,
+          nombre: person?.nombre || 'Usuario',
+          cantidad_bitacoras: personLogs.length,
+          advertencia: 'Resumen de demostración con datos ficticios. En producción leerá los Google Docs reales mediante IA.',
+          secciones: personLogs.map((b) => ({
+            titulo: `${b.titulo} (${b.area || 'Seguimiento'})`,
+            texto: b.extracto_demo || 'Sin extracto disponible.',
+          })),
+        });
+      }
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoadingSummary(false);
+    }
   }
+
+  const selectedPersonLogs = useMemo(() => {
+    if (selectedPersonId === null) return [];
+    if (isSupabaseConfigured && selectedPersonDetail?.bitacoras) {
+      return selectedPersonDetail.bitacoras;
+    }
+    return allLogs.filter((l) => l.persona_id === selectedPersonId);
+  }, [selectedPersonId, selectedPersonDetail, allLogs]);
 
   return (
     <div className="app-shell">
-      <aside className="sidebar" aria-label="Navegación principal">
-        <div className="brand">
-          <div className="brand-symbol" aria-hidden="true">C</div>
-          <div><strong>CEMIPRE</strong><span>Plataforma de bitácoras</span></div>
+      <aside className={`sidebar ${mobileNavOpen ? 'open' : ''}`} aria-label="Navegación principal">
+        <div className="sidebar-top-row">
+          <button type="button" className="brand" onClick={() => navigate('inicio')}>
+            <span className="brand-mark" aria-hidden="true">
+              <Leaf size={21} />
+            </span>
+            <span>
+              CEMIPRE
+              <small>ESPACIO DE EQUIPO</small>
+            </span>
+          </button>
+          <button
+            type="button"
+            className="mobile-close"
+            onClick={() => setMobileNavOpen(false)}
+            aria-label="Cerrar menú"
+          >
+            <X size={18} />
+          </button>
         </div>
-        <div className="workspace-label">ESPACIO DE TRABAJO</div>
-        <nav className="navigation" aria-label="Secciones">
-          {TABS.map((item) => (
-            <button key={item.id} className={`nav-item ${tab === item.id ? 'active' : ''}`}
-              type="button" onClick={() => setTab(item.id)} aria-current={tab === item.id ? 'page' : undefined}>
-              <span className="nav-symbol" aria-hidden="true">{item.symbol}</span>{item.label}
-            </button>
-          ))}
+
+        <div className="workspace-label">
+          <span className="workspace-dot" aria-hidden="true" />
+          <span>Centro CEMIPRE</span>
+          <ChevronDown size={14} />
+        </div>
+
+        <p className="nav-label">TU ESPACIO</p>
+        <nav aria-label="Secciones principales">
+          <button
+            type="button"
+            className={view === 'inicio' ? 'active' : ''}
+            onClick={() => navigate('inicio')}
+          >
+            <Home size={15} /> Inicio
+          </button>
+          <button
+            type="button"
+            className={view === 'usuarios' || view === 'usuario-detalle' ? 'active' : ''}
+            onClick={() => navigate('usuarios')}
+          >
+            <Users size={15} /> Usuarios
+            <span className="nav-count">{people.length}</span>
+          </button>
+          <button
+            type="button"
+            className={view === 'bitacoras' ? 'active' : ''}
+            onClick={() => navigate('bitacoras')}
+          >
+            <BookOpen size={15} /> Bitácoras
+          </button>
+          <button
+            type="button"
+            className={view === 'resumenes' ? 'active' : ''}
+            onClick={() => navigate('resumenes')}
+          >
+            <Sparkles size={15} /> Resúmenes IA
+            <span className="tiny-new">IA</span>
+          </button>
+          <button
+            type="button"
+            className={view === 'calendario' ? 'active' : ''}
+            onClick={() => navigate('calendario')}
+          >
+            <CalendarDays size={15} /> Calendario
+          </button>
+          <button
+            type="button"
+            className={view === 'actividad' ? 'active' : ''}
+            onClick={() => navigate('actividad')}
+          >
+            <Activity size={15} /> Actividad
+          </button>
         </nav>
+
+        <div className="sidebar-separator" />
+
+        <p className="nav-label">ACCESOS RÁPIDOS</p>
+        <nav aria-label="Accesos rápidos">
+          <button
+            type="button"
+            className={view === 'favoritos' ? 'active' : ''}
+            onClick={() => navigate('favoritos')}
+          >
+            <Star size={15} /> Mis favoritos
+            <span className="nav-count">{favorites.size}</span>
+          </button>
+          <button
+            type="button"
+            className={view === 'avisos' ? 'active' : ''}
+            onClick={() => navigate('avisos')}
+          >
+            <Mail size={15} /> Avisos por correo
+            {unreadNotices > 0 && <span className="nav-count">{unreadNotices}</span>}
+          </button>
+          <button
+            type="button"
+            className={`side-link ${view === 'drive' ? 'active' : ''}`}
+            onClick={() => navigate('drive')}
+          >
+            <GoogleDriveIcon size={16} /> Carpetas de Drive
+            <ArrowUpRight size={13} className="nav-count" />
+          </button>
+        </nav>
+
         <div className="sidebar-bottom">
-          <span className="status-indicator" aria-hidden="true" />
-          <div><strong>Modo demostración</strong><span>Sin cuentas ni datos reales</span></div>
+          <div className="private-box">
+            <ShieldCheck size={16} />
+            <div>
+              <strong>{isSupabaseConfigured ? 'Supabase temporal' : 'Un espacio privado'}</strong>
+              <small>{isSupabaseConfigured ? 'Sin login activo aún' : 'Datos de demostración'}</small>
+            </div>
+          </div>
+          <button type="button" className="help-link" onClick={() => setModal('about')}>
+            <Info size={13} /> Acerca del prototipo
+          </button>
         </div>
       </aside>
 
-      <main id="contenido" className="main-content">
+      <div className="main-shell">
         <header className="topbar">
-          <div className="breadcrumb">Panel de trabajo <span>/</span> <strong>{TABS.find((t) => t.id === tab)?.label}</strong></div>
-          <div className="top-actions"><span className="demo-chip">● ENTORNO LOCAL</span><span className="avatar" aria-label="Equipo de prueba">EQ</span></div>
-        </header>
-
-        <div className="page-body">
-          <div className="page-heading">
-            <div>
-              <p className="eyebrow">ORGANIZACIÓN · CEMIPRE</p>
-              <h1>{tab === 'bitacoras' ? 'Gestión de bitácoras' : tab === 'calendario' ? 'Calendario compartido' : 'Registro de actividad'}</h1>
-              <p className="subtitle">{tab === 'bitacoras'
-                ? 'Accede a las bitácoras y administra sus enlaces a Google Docs.'
-                : tab === 'calendario' ? 'Agenda de demostración guardada en la base de datos local.'
-                  : 'Historial de cambios hechos dentro de esta plataforma.'}</p>
-            </div>
-            {tab === 'bitacoras' && <button className="btn btn-primary" type="button" onClick={() => openModal('new-person')}>+ Nuevo usuario</button>}
-            {tab === 'calendario' && <button className="btn btn-primary" type="button" onClick={() => openModal('new-event')}>+ Crear evento</button>}
+          <div className="topbar-left">
+            <button
+              type="button"
+              className="mobile-menu-btn"
+              onClick={() => setMobileNavOpen(true)}
+              aria-label="Abrir menú"
+            >
+              <Menu size={18} />
+            </button>
+            <span>Espacio de trabajo</span>
+            <span aria-hidden="true">&gt;</span>
+            <b>{NAV_TITLES[view] || 'Inicio'}</b>
           </div>
 
-          <Notice kind="warn"><strong>Prototipo con datos ficticios.</strong> Aún no se conecta con Google Drive, Google Docs, IA ni correo electrónico. No lo publiques con información real sin implementar autenticación y permisos.</Notice>
-          {error && <Notice kind="error">{error} <button className="inline-button" type="button" onClick={() => setError('')}>Cerrar</button></Notice>}
-          {message && <Notice kind="success">{message} <button className="inline-button" type="button" onClick={() => setMessage('')}>Cerrar</button></Notice>}
+          <div className="topbar-right">
+            <span className="private-label">
+              <ShieldCheck size={13} />
+              {isSupabaseConfigured ? 'Supabase (demo)' : 'Privado (demo)'}
+            </span>
+            <button
+              type="button"
+              className="notification-button"
+              aria-label="Ver avisos por correo"
+              onClick={() => navigate('avisos')}
+            >
+              <Bell size={16} />
+              {unreadNotices > 0 && <i aria-hidden="true" />}
+            </button>
+            <div className="profile">
+              <span className="profile-avatar">{activeMember.initials}</span>
+              <div>
+                <label>
+                  <span className="sr-only">Cambiar perfil de demostración</span>
+                  <select
+                    value={activeMemberId}
+                    onChange={(e) => setActiveMemberId(e.target.value)}
+                  >
+                    {TEAM_MEMBERS.map((member) => (
+                      <option key={member.id} value={member.id}>
+                        {member.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <small>Perfil de demostración</small>
+              </div>
+            </div>
+          </div>
+        </header>
 
-          {busy ? <div className="empty-state">Cargando información…</div> : (
+        <main id="contenido" className="main-content">
+          {!isSupabaseConfigured && (
+            <div className="notice notice-info">
+              <strong>Vista previa local activa.</strong> Estás viendo datos ficticios de demostración. Para guardar datos reales de prueba en tu proyecto Supabase, copia <code>frontend/.env.example</code> a <code>frontend/.env.local</code> y ejecuta <code>supabase/schema.sql</code>.
+            </div>
+          )}
+
+          {error && (
+            <div className="notice notice-error" role="alert">
+              {error}{' '}
+              <button type="button" className="inline-button" onClick={() => setError('')}>
+                Cerrar
+              </button>
+            </div>
+          )}
+
+          {message && (
+            <div className="notice notice-success" role="status">
+              {message}{' '}
+              <button type="button" className="inline-button" onClick={() => setMessage('')}>
+                Cerrar
+              </button>
+            </div>
+          )}
+
+          {busy ? (
+            <div className="panel empty-state">Cargando espacio de trabajo…</div>
+          ) : (
             <>
-              <section className="stats" aria-label="Indicadores">
-                <div className="stat-card"><span>Usuarios registrados</span><strong>{people.length}</strong><small>En el sistema de prueba</small></div>
-                <div className="stat-card"><span>Bitácoras</span><strong>{totalLogs}</strong><small>Documentos por vincular</small></div>
-                <div className="stat-card"><span>Eventos</span><strong>{events.length}</strong><small>Calendario local</small></div>
-              </section>
-
-              {tab === 'bitacoras' && (
-                <div className="content-grid">
-                  <section className="panel people-panel" aria-label="Lista de usuarios">
-                    <div className="panel-title"><h2>Usuarios</h2><span className="count-pill">{people.length}</span></div>
-                    <label className="search-field">
-                      <span className="sr-only">Buscar usuario por nombre o código</span>
-                      <span aria-hidden="true">⌕</span>
-                      <input type="search" placeholder="Buscar usuario…" value={search}
-                        onChange={(e) => setSearch(e.target.value)} />
-                    </label>
-                    <div className="people-list">
-                      {visiblePeople.length === 0 ? <p className="muted padded">Sin resultados. Puedes crear un usuario nuevo.</p> : visiblePeople.map((p) => (
-                        <button type="button" key={p.id}
-                          className={`person-row ${selectedId === p.id ? 'selected' : ''}`}
-                          onClick={() => setSelectedId(p.id)}>
-                          <span className="person-avatar">{p.codigo.slice(-2)}</span>
-                          <span className="person-info"><strong>{p.nombre}</strong><small>{p.codigo} · {p.total_bitacoras} bitácoras</small></span>
-                          <span className="chevron" aria-hidden="true">›</span>
-                        </button>
-                      ))}
-                    </div>
-                  </section>
-
-                  <section className="panel detail-panel" aria-label="Detalle de bitácoras">
-                    {!person ? <div className="empty-state">Selecciona un usuario para ver sus bitácoras.</div> : (
-                      <>
-                        <div className="detail-heading">
-                          <div className="title-with-icon"><div className="detail-avatar">{person.codigo.slice(-2)}</div>
-                            <div><p className="eyebrow">{person.codigo}</p><h2>{person.nombre}</h2><p className="muted">{person.bitacoras.length} bitácoras registradas</p></div>
-                          </div>
-                          <button className="btn btn-secondary" type="button" onClick={() => openModal('new-log')}>+ Agregar bitácora</button>
-                        </div>
-                        <div className="section-heading"><h3>Documentos y registros</h3><span>{person.bitacoras.length} documentos</span></div>
-                        {person.bitacoras.length === 0 ? <div className="empty-state">Este usuario aún no tiene bitácoras.</div> : (
-                          <div className="logs-list">{person.bitacoras.map((b) => (
-                            <article className="log-row" key={b.id}>
-                              <span className="doc-icon" aria-hidden="true">≡</span>
-                              <div className="log-body"><strong>{b.titulo}</strong><small>Actualización de ficha: {formatDate(b.actualizada)}</small>
-                                <span className={`link-status ${b.url_docs ? 'linked' : ''}`}>{b.url_docs ? '● Enlace a Google Docs agregado' : '○ Sin documento vinculado'}</span>
-                              </div>
-                              <div className="log-actions">
-                                <button className="btn btn-tiny" type="button" onClick={() => openModal('edit-log', b)}>Configurar</button>
-                                {b.url_docs && <a className="btn btn-tiny btn-outline" target="_blank" rel="noopener noreferrer" href={b.url_docs}>Abrir ↗</a>}
-                              </div>
-                            </article>
-                          ))}</div>
-                        )}
-                        <div className="summary-card">
-                          <div className="summary-top"><span className="sparkle" aria-hidden="true">✧</span>
-                            <div><h3>Resumen por usuario</h3><p>Vista local de ejemplo. La generación mediante IA todavía no está integrada.</p></div>
-                            <button className="btn btn-secondary" type="button" onClick={showSummary}>Ver demo</button>
-                          </div>
-                          {summary && <div className="summary-result">
-                            <strong>Resumen ilustrativo · {summary.cantidad_bitacoras} bitácoras</strong>
-                            <p className="muted">{summary.advertencia}</p>
-                            <ul>{summary.secciones.map((s, i) => <li key={`${s.titulo}-${i}`}><strong>{s.titulo}:</strong> {s.texto}</li>)}</ul>
-                          </div>}
-                        </div>
-                      </>
-                    )}
-                  </section>
-                </div>
+              {view === 'inicio' && (
+                <InicioView
+                  activeMember={activeMember}
+                  people={people}
+                  logs={allLogs}
+                  events={events}
+                  todayLabel={todayLabel}
+                  onNavigate={navigate}
+                  onSelectPerson={handleSelectPerson}
+                  onOpenLog={openLogModal}
+                  onOpenNewEvent={openNewEventModal}
+                  formatShortDate={formatShortDate}
+                />
               )}
 
-              {tab === 'calendario' && (
-                <section className="panel wide-panel">
-                  <div className="panel-title"><h2>Eventos programados</h2><span className="count-pill">{events.length}</span></div>
-                  <p className="muted">Los eventos se guardan en SQLite. Todavía no se sincronizan con Google Calendar.</p>
-                  {events.length === 0 ? <div className="empty-state">No hay eventos. Crea el primero para comenzar.</div> : (
-                    <div className="event-list">{events.map((event) => (
-                      <article className="event-row" key={event.id}>
-                        <div className="event-date"><strong>{new Date(event.inicio).toLocaleDateString('es-CL', { timeZone: 'America/Santiago', day: '2-digit' })}</strong><span>{new Date(event.inicio).toLocaleDateString('es-CL', { timeZone: 'America/Santiago', month: 'short' })}</span></div>
-                        <div className="event-body"><h3>{event.titulo}</h3><p>{formatDateTime(event.inicio)} – {formatDateTime(event.fin)}</p>
-                          <p>{event.responsable}{event.descripcion ? ` · ${event.descripcion}` : ''}</p></div>
-                        <button className="btn btn-tiny" type="button" onClick={() => removeEvent(event)}>Eliminar</button>
-                      </article>
-                    ))}</div>
-                  )}
-                </section>
+              {view === 'usuarios' && (
+                <UsuariosView
+                  people={people}
+                  search={userSearch}
+                  onSearchChange={setUserSearch}
+                  programFilter={programFilter}
+                  onProgramFilterChange={setProgramFilter}
+                  onSelectPerson={handleSelectPerson}
+                  onNewPerson={openNewPersonModal}
+                />
               )}
 
-              {tab === 'actividad' && (
-                <section className="panel wide-panel">
-                  <div className="panel-title"><h2>Últimos movimientos</h2><span className="count-pill">{changes.length}</span></div>
-                  <Notice>Este historial registra cambios de usuarios, enlaces, bitácoras y eventos hechos en esta aplicación. <strong>No registra cambios dentro de Google Docs ni envía emails.</strong></Notice>
-                  {changes.length === 0 ? <div className="empty-state">Todavía no hay movimientos registrados.</div> : (
-                    <div className="activity-list">{changes.map((item) => (
-                      <div className="activity-row" key={item.id}><span className="timeline-dot" aria-hidden="true" />
-                        <div><strong>{item.descripcion}</strong><small>{formatDateTime(item.fecha)}</small></div></div>
-                    ))}</div>
-                  )}
-                </section>
+              {view === 'usuario-detalle' && (
+                <UsuarioDetailView
+                  person={selectedPersonDetail}
+                  personLogs={selectedPersonLogs}
+                  summary={summary}
+                  onBack={() => navigate('usuarios')}
+                  onNewLog={() => openLogModal(null)}
+                  onOpenLog={openLogModal}
+                  onOpenSummary={(id) => {
+                    navigate('resumenes');
+                    handleGenerateSummary(id);
+                  }}
+                  formatShortDate={formatShortDate}
+                />
+              )}
+
+              {view === 'bitacoras' && (
+                <BitacorasView
+                  logs={allLogs}
+                  people={people}
+                  favorites={favorites}
+                  onToggleFavorite={toggleFavorite}
+                  onOpenLog={openLogModal}
+                  onNewLog={() => openLogModal(null)}
+                  formatShortDate={formatShortDate}
+                />
+              )}
+
+              {view === 'favoritos' && (
+                <BitacorasView
+                  logs={allLogs}
+                  people={people}
+                  favorites={favorites}
+                  onlyFavorites
+                  onToggleFavorite={toggleFavorite}
+                  onOpenLog={openLogModal}
+                  onNewLog={() => openLogModal(null)}
+                  formatShortDate={formatShortDate}
+                />
+              )}
+
+              {view === 'resumenes' && (
+                <ResumenesIAView
+                  people={people}
+                  selectedPersonId={selectedPersonId}
+                  summary={summary}
+                  loadingSummary={loadingSummary}
+                  onSelectPerson={(id) => {
+                    setSelectedPersonId(id);
+                    setSummary(null);
+                  }}
+                  onGenerateSummary={handleGenerateSummary}
+                  onNavigateToPerson={handleSelectPerson}
+                />
+              )}
+
+              {view === 'calendario' && (
+                <CalendarioView
+                  events={events}
+                  isSupabaseConfigured={isSupabaseConfigured}
+                  onNewEvent={openNewEventModal}
+                  onDeleteEvent={handleDeleteEvent}
+                  formatDateTime={formatDateTime}
+                />
+              )}
+
+              {view === 'actividad' && (
+                <ActividadView changes={changes} formatDateTime={formatDateTime} />
+              )}
+
+              {view === 'avisos' && (
+                <AvisosCorreoView
+                  notices={notices}
+                  onPreviewNotice={(notice) => {
+                    setModalData(notice);
+                    setModal('email-preview');
+                  }}
+                  formatDateTime={formatDateTime}
+                />
+              )}
+
+              {view === 'drive' && (
+                <CarpetasDriveView
+                  people={people}
+                  logs={allLogs}
+                  selectedPersonId={selectedPersonId}
+                  onSelectPerson={setSelectedPersonId}
+                  onOpenLog={openLogModal}
+                />
               )}
             </>
           )}
-          <footer className="footer">CEMIPRE · Proyecto colaborativo universitario · Datos ficticios para desarrollo</footer>
-        </div>
-      </main>
 
-      {modal && <Modal title={{ 'new-person': 'Registrar usuario', 'new-log': 'Agregar bitácora', 'edit-log': 'Configurar bitácora', 'new-event': 'Crear evento' }[modal]}
-        onClose={() => setModal(null)}>
-        <form onSubmit={submitModal} className="form-grid">
-          {error && <Notice kind="error">{error}</Notice>}
-          {modal === 'new-person' && <>
-            <label>Código de usuario<input autoFocus maxLength={32} required placeholder="Ej.: USR-004" value={form.codigo || ''} onChange={(e) => updateField('codigo', e.target.value)} /></label>
-            <label>Nombre identificador<input maxLength={120} required placeholder="Ej.: Usuario 004" value={form.nombre || ''} onChange={(e) => updateField('nombre', e.target.value)} /></label>
-            <Notice kind="warn">Usa únicamente identidades inventadas mientras no existan controles de acceso.</Notice>
-          </>}
-          {(modal === 'new-log' || modal === 'edit-log') && <>
-            <label>Nombre de la bitácora<input autoFocus maxLength={160} required placeholder="Ej.: Seguimiento general" value={form.titulo || ''} onChange={(e) => updateField('titulo', e.target.value)} /></label>
-            <label>Enlace de Google Docs (opcional)<input type="url" placeholder="https://docs.google.com/document/d/.../edit" value={form.url_docs || ''} onChange={(e) => updateField('url_docs', e.target.value)} /></label>
-            <p className="form-hint">El enlace solo se guarda como referencia. La edición se realizará en Google Docs con los permisos existentes.</p>
-          </>}
-          {modal === 'new-event' && <>
-            <label>Nombre del evento<input autoFocus maxLength={160} required placeholder="Ej.: Reunión de equipo" value={form.titulo || ''} onChange={(e) => updateField('titulo', e.target.value)} /></label>
-            <div className="two-fields"><label>Inicio<input required type="datetime-local" value={form.inicio || ''} onChange={(e) => updateField('inicio', e.target.value)} /></label>
-              <label>Fin<input required type="datetime-local" value={form.fin || ''} onChange={(e) => updateField('fin', e.target.value)} /></label></div>
-            <label>Responsable<input maxLength={120} value={form.responsable || ''} placeholder="Equipo CEMIPRE" onChange={(e) => updateField('responsable', e.target.value)} /></label>
-            <label>Descripción (opcional)<textarea maxLength={2000} rows={3} value={form.descripcion || ''} onChange={(e) => updateField('descripcion', e.target.value)} /></label>
-          </>}
-          <FormActions saving={saving} onCancel={() => setModal(null)} action={modal === 'new-event' ? 'Crear evento' : 'Guardar'} />
-        </form>
-      </Modal>}
+          <footer className="page-footer">
+            CEMIPRE · Prototipo colaborativo con datos ficticios · Enlace directo a Google Docs
+          </footer>
+        </main>
+      </div>
+
+      {modal === 'new-person' && (
+        <Modal
+          title="Registrar usuario"
+          subtitle="Usa identidades ficticias mientras el sistema no tenga autenticación."
+          onClose={() => setModal(null)}
+        >
+          <form onSubmit={handleCreatePerson} className="form-grid">
+            {error && <div className="notice notice-error">{error}</div>}
+            <label>
+              Código de usuario
+              <input
+                autoFocus
+                maxLength={32}
+                required
+                placeholder="Ej.: USR-009"
+                value={form.codigo || ''}
+                onChange={(e) => setForm((c) => ({ ...c, codigo: e.target.value }))}
+              />
+            </label>
+            <label>
+              Nombre identificador
+              <input
+                maxLength={120}
+                required
+                placeholder="Ej.: Usuario 009"
+                value={form.nombre || ''}
+                onChange={(e) => setForm((c) => ({ ...c, nombre: e.target.value }))}
+              />
+            </label>
+            <FormActions onCancel={() => setModal(null)} saving={saving} action="Guardar usuario" />
+          </form>
+        </Modal>
+      )}
+
+      {modal === 'log-editor' && (
+        <LogEditorModal
+          log={modalData}
+          people={people}
+          personId={selectedPersonId}
+          personName={
+            people.find((p) => p.id === (modalData.persona_id || selectedPersonId))?.nombre || 'Usuario'
+          }
+          saving={saving}
+          error={error}
+          onClose={() => setModal(null)}
+          onSave={handleSaveLog}
+          onAddComment={handleAddComment}
+          formatDateTime={formatDateTime}
+          activeMemberName={activeMember.name}
+        />
+      )}
+
+      {modal === 'new-event' && (
+        <Modal
+          title="Crear evento"
+          subtitle="Programa una reunión, sesión o taller en la agenda del equipo."
+          onClose={() => setModal(null)}
+        >
+          <form onSubmit={handleCreateEvent} className="form-grid">
+            {error && <div className="notice notice-error">{error}</div>}
+            <label>
+              Nombre del evento
+              <input
+                autoFocus
+                maxLength={160}
+                required
+                placeholder="Ej.: Reunión de coordinación"
+                value={form.titulo || ''}
+                onChange={(e) => setForm((c) => ({ ...c, titulo: e.target.value }))}
+              />
+            </label>
+            <div className="two-fields">
+              <label>
+                Inicio
+                <input
+                  required
+                  type="datetime-local"
+                  value={form.inicio || ''}
+                  onChange={(e) => setForm((c) => ({ ...c, inicio: e.target.value }))}
+                />
+              </label>
+              <label>
+                Fin
+                <input
+                  required
+                  type="datetime-local"
+                  value={form.fin || ''}
+                  onChange={(e) => setForm((c) => ({ ...c, fin: e.target.value }))}
+                />
+              </label>
+            </div>
+            <label>
+              Responsable
+              <input
+                maxLength={120}
+                value={form.responsable || ''}
+                onChange={(e) => setForm((c) => ({ ...c, responsable: e.target.value }))}
+              />
+            </label>
+            <label>
+              Descripción / Lugar (opcional)
+              <textarea
+                maxLength={2000}
+                rows={3}
+                value={form.descripcion || ''}
+                onChange={(e) => setForm((c) => ({ ...c, descripcion: e.target.value }))}
+              />
+            </label>
+            <FormActions onCancel={() => setModal(null)} saving={saving} action="Crear evento" />
+          </form>
+        </Modal>
+      )}
+
+      {modal === 'email-preview' && (
+        <EmailPreviewModal
+          notice={modalData}
+          onClose={() => setModal(null)}
+          formatDateTime={formatDateTime}
+        />
+      )}
+
+      {modal === 'about' && (
+        <AboutModal
+          isSupabaseConfigured={isSupabaseConfigured}
+          onClose={() => setModal(null)}
+        />
+      )}
     </div>
   );
 }

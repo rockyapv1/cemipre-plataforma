@@ -19,3 +19,5 @@ dist/
 .idea/
 # Logs
 *.log
+# Docs / PDFs locales
+docs/Reparto_Trabajo_CEMIPRE.pdf
