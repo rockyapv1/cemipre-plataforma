@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from './api.js';
+import CarpetasDriveView from './components/CarpetasDriveView.jsx';
 
 const TABS = [
   { id: 'bitacoras', label: 'Bitácoras', symbol: '▦' },
   { id: 'calendario', label: 'Calendario', symbol: '▤' },
   { id: 'actividad', label: 'Actividad', symbol: '◎' },
+  { id: 'drive', label: 'Carpetas Drive', symbol: '▣' },
 ];
 
 const formatDate = (iso) => new Intl.DateTimeFormat('es-CL', {
@@ -226,10 +228,11 @@ export default function App() {
           <div className="page-heading">
             <div>
               <p className="eyebrow">ORGANIZACIÓN · CEMIPRE</p>
-              <h1>{tab === 'bitacoras' ? 'Gestión de bitácoras' : tab === 'calendario' ? 'Calendario compartido' : 'Registro de actividad'}</h1>
+              <h1>{tab === 'bitacoras' ? 'Gestión de bitácoras' : tab === 'calendario' ? 'Calendario compartido' : tab === 'drive' ? 'Sincronización de Drive' : 'Registro de actividad'}</h1>
               <p className="subtitle">{tab === 'bitacoras'
                 ? 'Accede a las bitácoras y administra sus enlaces a Google Docs.'
                 : tab === 'calendario' ? 'Agenda de demostración guardada en la base de datos local.'
+                  : tab === 'drive' ? 'Consulta el estado y sincroniza los metadatos de Google Drive.'
                   : 'Historial de cambios hechos dentro de esta plataforma.'}</p>
             </div>
             {tab === 'bitacoras' && <button className="btn btn-primary" type="button" onClick={() => openModal('new-person')}>+ Nuevo usuario</button>}
@@ -328,6 +331,8 @@ export default function App() {
                   )}
                 </section>
               )}
+
+              {tab === 'drive' && <CarpetasDriveView />}
 
               {tab === 'actividad' && (
                 <section className="panel wide-panel">

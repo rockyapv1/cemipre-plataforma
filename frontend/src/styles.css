@@ -144,3 +144,17 @@ h2, h3, p { margin-top:0; }
 @media (max-width: 760px) { .app-shell { display:block; } .sidebar { width:100%; min-height:0; padding:13px 16px; gap:14px; } .brand { padding:0; } .brand-symbol { width:36px; height:36px; flex-basis:36px; border-radius:10px; font-size:18px; } .workspace-label, .sidebar-bottom { display:none; } .navigation { display:flex; gap:6px; overflow:auto; } .nav-item { min-width:0; flex:1; padding:9px 10px; font-size:12px; justify-content:center; } .nav-symbol { display:none; } .topbar { height:52px; } .page-heading { align-items:flex-start; flex-direction:column; } .page-heading .btn { align-self:flex-start; } .stats { gap:9px; } .stat-card { padding:14px; min-height:113px; } .stat-card strong { font-size:29px; } .stat-card span { font-size:11px; } .stat-card small { font-size:9px; } .content-grid { grid-template-columns:1fr; } .people-panel { min-height:unset; } .people-list { max-height:270px; overflow:auto; } .detail-heading { padding:19px; } .demo-chip { font-size:9px; } .breadcrumb { font-size:11px; } .modal { padding:19px; } }
 @media (max-width: 460px) { .page-body { padding:24px 12px; } .topbar { padding:0 12px; } .stats { grid-template-columns:repeat(3, minmax(0,1fr)); } .stat-card { padding:12px; } .stat-card strong { font-size:26px; } .stat-card span { min-height:28px; } .detail-heading .btn { width:100%; } .summary-top .btn { width:100%; } .two-fields { grid-template-columns:1fr; } .event-row { flex-wrap:wrap; } }
 @media (prefers-reduced-motion:reduce) { *, *::before, *::after { scroll-behavior:auto !important; animation-duration:.01ms !important; transition-duration:.01ms !important; } }
+
+/* DRV-03 · Carpeta Drive: responsive y navegable mediante teclado */
+.drive-sync-actions { display: flex; gap: 12px; flex-wrap: wrap; margin: 20px 0; }
+.drive-state { margin: 12px 0 18px; }
+.drive-state p { margin: 5px 0; }
+.drive-metrics { display: grid; grid-template-columns: repeat(auto-fit,minmax(155px,1fr)); gap: 12px; margin-bottom: 24px; }
+.drive-folder-list { display: grid; gap: 10px; margin: 14px 0; }
+.drive-folder { border: 1px solid var(--line, #475569); border-radius: 9px; padding: 12px 14px; }
+.drive-folder summary { display: flex; justify-content: space-between; gap: 12px; cursor: pointer; font-weight: 600; }
+.drive-folder summary:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; }
+.drive-folder ul { padding-left: 22px; }
+.drive-folder li { margin-top: 10px; }
+.drive-folder a { text-decoration: underline; }
+@media(max-width:600px) { .drive-folder summary { display: list-item; } }
